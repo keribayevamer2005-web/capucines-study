@@ -265,21 +265,6 @@
     white-space: pre-wrap;
   }
   .hidden { display: none; }
-  /* shown only on phone-sized screens (the study is desktop only) */
-  #mobileNotice { display: none; }
-  @media (max-width: 699px) {
-    #mobileNotice {
-      display: flex;
-      position: fixed;
-      inset: 0;
-      z-index: 200;
-      background: var(--ivory);
-      align-items: center;
-      justify-content: center;
-      padding: 40px;
-      text-align: center;
-    }
-  }
 </style>
 </head>
 <body>
@@ -288,15 +273,6 @@
 
 <!-- JavaScript puts the current stage's content inside this div -->
 <main id="app"></main>
-
-<!-- Desktop-only notice: covers the page on phone-sized screens -->
-<div id="mobileNotice">
-  <div>
-    <h2>Please open on a computer</h2>
-    <p class="lede" style="margin-top:18px">This study is designed for desktop and laptop screens.
-       Please open your study link in a browser on a computer to participate.</p>
-  </div>
-</div>
 
 <!-- Setup screen, only shown when the URL has no ?cond= parameter -->
 <div class="overlay hidden" id="setupScreen">
