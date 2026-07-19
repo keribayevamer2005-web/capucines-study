@@ -886,6 +886,17 @@ var isPreview = params.get('preview') === '1';
 var previewCond = (params.get('cond') || '').toLowerCase();
 
 function boot() {
+  // if this tab holds a session for a DIFFERENT participant id (or a
+  // different preview condition), drop it and start fresh - this mainly
+  // matters when testing several links in the same tab
+  var differentPerson = S.ids && urlIds.sessionId && S.ids.sessionId !== urlIds.sessionId;
+  var differentPreview = isPreview && S.iv && COND_TO_IV[previewCond] &&
+                         S.iv !== COND_TO_IV[previewCond];
+  if (differentPerson || differentPreview) {
+    S = {};
+    try { sessionStorage.removeItem('capucines'); } catch (e) {}
+  }
+
   if (S.submitted) { showCompletion(); return; }
 
   if (!S.responseId) {
