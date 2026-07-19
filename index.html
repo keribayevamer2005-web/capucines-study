@@ -884,6 +884,15 @@ var urlIds = {
 };
 var isPreview = params.get('preview') === '1';
 var previewCond = (params.get('cond') || '').toLowerCase();
+var isTest = params.get('test') === '1';   // researcher test mode: fresh random draw on EVERY open
+
+if (isTest) {
+  // behave like a brand-new participant every single time the page opens
+  S = {};
+  try { sessionStorage.removeItem('capucines'); } catch (e) {}
+  var t = 'T' + Date.now().toString(36).toUpperCase() + Math.floor(Math.random() * 1000);
+  urlIds = { prolificPid: 'TEST', studyId: 'TEST', sessionId: t, qid: '' };
+}
 
 function boot() {
   // if this tab holds a session for a DIFFERENT participant id (or a
