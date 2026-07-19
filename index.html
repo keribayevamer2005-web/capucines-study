@@ -265,6 +265,28 @@
     white-space: pre-wrap;
   }
   .hidden { display: none; }
+
+  /* ============ QUESTIONNAIRE ============ */
+  .q-wrap { max-width: 760px; margin: 0 auto; padding: 70px 20px 90px; }
+  .q-progress { font-size: 11px; letter-spacing: 0.24em; text-transform: uppercase;
+                color: var(--stone); text-align: center; margin-bottom: 26px; }
+  .q-instruction { text-align: center; max-width: 620px; margin: 0 auto 34px; color: #3c3a37; }
+  .q-item { border: none; margin: 0 0 34px; padding: 0; }
+  .q-item legend, .q-item .q-text { font-size: 15px; margin-bottom: 12px; color: var(--ink); }
+  .q-item.q-missing legend, .q-item.q-missing .q-text { color: #8a2a2a; }
+  .likert { display: flex; align-items: center; justify-content: center; gap: 6px; flex-wrap: nowrap; }
+  .likert .anchor { font-size: 11px; color: var(--stone); width: 110px; }
+  .likert .anchor.right { text-align: left; } .likert .anchor.left { text-align: right; }
+  .opt { display: inline-flex; flex-direction: column; align-items: center; gap: 3px;
+         padding: 4px 7px; cursor: pointer; font-size: 12px; color: #55524e; }
+  .optline { display: block; margin: 6px 0; cursor: pointer; font-size: 14.5px; }
+  .optline input { margin-right: 9px; }
+  .q-num { font-family: var(--sans); font-size: 15px; padding: 9px 12px;
+           border: 1px solid #c9c4bb; background: #fff; width: 190px; }
+  .q-error { display: none; color: #8a2a2a; text-align: center; margin: 18px 0; font-size: 14px; }
+  .q-nav { text-align: center; margin-top: 44px; }
+  .center-screen { min-height: 55vh; display: flex; align-items: center;
+                   justify-content: center; text-align: center; padding: 40px; }
 </style>
 </head>
 <body>
@@ -273,33 +295,6 @@
 
 <!-- JavaScript puts the current stage's content inside this div -->
 <main id="app"></main>
-
-<!-- Setup screen, only shown when the URL has no ?cond= parameter -->
-<div class="overlay hidden" id="setupScreen">
-  <div class="inner">
-    <p class="eyebrow">Preview mode</p>
-    <h2>Choose a condition</h2>
-    <p class="lede">Participant links assign this automatically (e.g. <em>?cond=low&amp;pid=P001</em>).</p>
-    <div class="buttons">
-      <button class="cta outline" data-cond="low">Low</button>
-      <button class="cta outline" data-cond="moderate">Moderate</button>
-      <button class="cta outline" data-cond="high">High</button>
-      <button class="cta" data-cond="random">Random</button>
-    </div>
-  </div>
-</div>
-
-<!-- Thank-you screen, shown after the participant clicks "Add to Bag" -->
-<div class="overlay hidden" id="endScreen">
-  <div class="inner">
-    <h2>Thank you</h2>
-    <p class="lede">Your response has been recorded. You can now return to the survey.</p>
-    <pre id="dataBox"></pre>
-    <div class="buttons">
-      <button class="cta outline" id="downloadBtn">Download data (JSON)</button>
-    </div>
-  </div>
-</div>
 
 <script>
 /* ==================================================================
@@ -475,56 +470,66 @@ var CONDITIONS = {
 };
 
 /* ==================================================================
-   PART 4: RECORDING THE DATA
+   PART 4: SETTINGS
    ================================================================== */
 
-// OPTIONAL: paste a Google Apps Script "web app" URL between the quotes
-// to automatically save every participant's data to a Google Sheet.
-// Leave empty to turn automatic saving off. (Setup guide: see the
-// message from the developer, or ask - it takes about 15 minutes.)
-var DATA_ENDPOINT = 'https://script.google.com/macros/s/AKfycbxaCCa9JB0UwkE1IEtwKGpmOz-TF_yQ8tQwsCux-g2oCgOuRLmIwOSgr-QXdax7-Ifx6A/exec';
+// the backend (Apps Script web app) that assigns conditions and stores data
+var API_URL = 'https://script.google.com/macros/s/AKfycbxaCCa9JB0UwkE1IEtwKGpmOz-TF_yQ8tQwsCux-g2oCgOuRLmIwOSgr-QXdax7-Ifx6A/exec';
 
-// everything we record about this participant goes in this object
-var studyData = {
-  participantId: null,        // from the &pid= part of the URL, if given
-  condition: null,            // "low", "moderate" or "high"
-  startedAt: null,            // when the study started (readable date)
-  clicks: [],                 // every button click: what + when
-  stageTimes: [],             // how long each stage was viewed
-  reachedProductPage: false,
-  addedToBag: false,
-  moduleViews: {},            // per module: when first seen + total ms on screen
-  totalBrowsingTimeMs: null   // filled in at the very end
-};
+// paste the Prolific completion URL here before launch (leave empty for tests)
+var PROLIFIC_COMPLETION_URL = '';
 
-var startTime = null;   // the exact millisecond the study started
-var stageStartTime = null;   // when the current stage began
-
-// remember one button click, with the time since the study started
-function recordClick(whatWasClicked) {
-  studyData.clicks.push({
-    label: whatWasClicked,
-    msSinceStart: Date.now() - startTime
-  });
-}
-
-// lets you type getStudyData() in the browser console to see the data
-window.getStudyData = function () { return studyData; };
+var SCHEMA_VERSION = 'CAPUCINES_V3';
+var QUESTIONNAIRE_VERSION = 'PRETEST1_FIXED_RIT_IC_CUR';
+var IV_TO_COND = { 1: 'low', 2: 'moderate', 3: 'high' };
+var COND_TO_IV = { low: 1, moderate: 2, high: 3 };
 
 /* ==================================================================
-   PART 5: RUNNING THE STUDY
+   PART 5: SESSION STATE
+   Everything about this participant's session is kept in S and
+   mirrored to sessionStorage, so a refresh restores the same
+   condition, the same questionnaire page, and all saved answers.
    ================================================================== */
 
-/* ---- dwell-time tracking ----
-   Watches which content module (section) is on screen, and counts for
-   how long. A module counts as "viewed" while at least a third of it
-   is visible. Results go into studyData.moduleViews, for example:
-   { "A": { "firstSeenMs": 120, "visibleMs": 4300 }, ... }            */
+var S = {};
+try { S = JSON.parse(sessionStorage.getItem('capucines') || '{}'); } catch (e) { S = {}; }
+function saveS() { try { sessionStorage.setItem('capucines', JSON.stringify(S)); } catch (e) {} }
+
+/* ==================================================================
+   PART 6: TALKING TO THE BACKEND
+   ================================================================== */
+
+function api(payload, onOk, onFail) {
+  payload.responseId = S.responseId;
+  fetch(API_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify(payload)
+  }).then(function (r) { return r.json(); })
+    .then(function (res) {
+      if (res && res.ok) onOk(res);
+      else onFail(res && res.error ? res.error : 'server error');
+    })
+    .catch(function (err) { onFail(String(err)); });
+}
+
+/* ==================================================================
+   PART 7: BROWSING TELEMETRY (clicks, stage times, module dwell)
+   ================================================================== */
+
+var telemetry = { clicks: [], stageTimes: [], moduleViews: {} };
+var startTime = null;
+var stageStartTime = null;
+
+function recordClick(label) {
+  telemetry.clicks.push({ label: label, msSinceStart: Date.now() - startTime });
+}
+
 var moduleObserver = null;
 var watchedSections = [];
 
 function watchModules() {
-  stopWatchingModules();   // close any previous stage's counters first
+  stopWatchingModules();
   watchedSections = [];
   var sections = document.querySelectorAll('section[data-module]');
   for (var i = 0; i < sections.length; i++) {
@@ -538,8 +543,8 @@ function watchModules() {
       for (var k = 0; k < watchedSections.length; k++) {
         var w = watchedSections[k];
         if (w.el !== entry.target) continue;
-        var rec = studyData.moduleViews[w.module];
-        if (!rec) rec = studyData.moduleViews[w.module] = { firstSeenMs: null, visibleMs: 0 };
+        var rec = telemetry.moduleViews[w.module];
+        if (!rec) rec = telemetry.moduleViews[w.module] = { firstSeenMs: null, visibleMs: 0 };
         if (entry.isIntersecting) {
           w.visibleSince = Date.now();
           if (rec.firstSeenMs === null) rec.firstSeenMs = Date.now() - startTime;
@@ -550,78 +555,98 @@ function watchModules() {
       }
     }
   }, { threshold: 0.33 });
-  for (var j = 0; j < watchedSections.length; j++) {
-    moduleObserver.observe(watchedSections[j].el);
-  }
+  for (var j = 0; j < watchedSections.length; j++) moduleObserver.observe(watchedSections[j].el);
 }
 
 function stopWatchingModules() {
-  // add any still-running time to the totals, then stop observing
   for (var i = 0; i < watchedSections.length; i++) {
     var w = watchedSections[i];
     if (w.visibleSince !== null) {
-      studyData.moduleViews[w.module].visibleMs += Date.now() - w.visibleSince;
+      telemetry.moduleViews[w.module].visibleMs += Date.now() - w.visibleSince;
       w.visibleSince = null;
     }
   }
   if (moduleObserver) { moduleObserver.disconnect(); moduleObserver = null; }
 }
 
-var app = document.getElementById('app');
-var currentCondition = null;
-var isPreview = false;   // true only when the condition was picked on the setup screen
+// turn the telemetry into a simple list of events for the EVENTS sheet
+function buildEvents() {
+  var ev = [];
+  var i;
+  for (i = 0; i < telemetry.clicks.length; i++) {
+    ev.push({ type: 'click', label: telemetry.clicks[i].label,
+              timeMs: telemetry.clicks[i].msSinceStart });
+  }
+  for (i = 0; i < telemetry.stageTimes.length; i++) {
+    var s = telemetry.stageTimes[i];
+    ev.push({ type: 'stage', stage: s.stage, label: s.modules, dwellMs: s.msOnStage });
+  }
+  for (var m in telemetry.moduleViews) {
+    var r = telemetry.moduleViews[m];
+    ev.push({ type: 'module', label: m, timeMs: r.firstSeenMs, dwellMs: r.visibleMs });
+  }
+  return ev;
+}
 
-// Shows stage number "i" (starting from 0) of the current condition.
+/* ==================================================================
+   PART 8: SIMPLE FULL-SCREEN MESSAGES
+   ================================================================== */
+
+var app = document.getElementById('app');
+
+function showCenter(title, text) {
+  app.innerHTML = '<div class="center-screen"><div>' +
+    '<h2>' + title + '</h2>' +
+    (text ? '<p class="lede" style="margin-top:18px">' + text + '</p>' : '') +
+    '</div></div>';
+  window.scrollTo(0, 0);
+}
+
+function showError(text) {
+  showCenter('Something went wrong',
+    text || 'A technical problem occurred. Please close this window and try the study link again later.');
+}
+
+/* ==================================================================
+   PART 9: THE BROWSING FLOW
+   ================================================================== */
+
+function beginBrowsing() {
+  startTime = Date.now();
+  if (!S.startISO) { S.startISO = new Date().toISOString(); saveS(); }
+  showStage(0);
+}
+
 function showStage(i) {
-  var stages = CONDITIONS[currentCondition];
+  var stages = CONDITIONS[IV_TO_COND[S.iv]];
   var stage = stages[i];
   var isLastStage = (i === stages.length - 1);
-
   stageStartTime = Date.now();
 
-  // build the HTML: all of this stage's modules, then the button
   var html = '';
-  for (var k = 0; k < stage.modules.length; k++) {
-    var letter = stage.modules[k];
-    html += MODULES[letter]();
-  }
+  for (var k = 0; k < stage.modules.length; k++) html += MODULES[stage.modules[k]]();
   html += '<div class="button-area">' +
             '<button class="cta hidden-btn" id="stageBtn">' + stage.label + '</button>' +
           '</div>';
   app.innerHTML = html;
-  window.scrollTo(0, 0);   // start each stage at the top of the page
-  watchModules();          // count how long each module is on screen
+  window.scrollTo(0, 0);
+  watchModules();
 
   var button = document.getElementById('stageBtn');
-
-  // the button only becomes visible after the required viewing time
-  setTimeout(function () {
-    button.classList.remove('hidden-btn');
-  }, stage.wait);
+  setTimeout(function () { button.classList.remove('hidden-btn'); }, stage.wait);
 
   button.onclick = function () {
-    // extra safety: ignore clicks while the button is still hidden
     if (button.classList.contains('hidden-btn')) return;
-
     stopWatchingModules();
     recordClick(stage.label + ' (stage ' + (i + 1) + ' of ' + stages.length + ')');
-    studyData.stageTimes.push({
-      stage: i + 1,
-      modules: stage.modules.join('+'),
-      msOnStage: Date.now() - stageStartTime
-    });
-
-    if (isLastStage) {
-      showProductPage();
-    } else {
-      showStage(i + 1);
-    }
+    telemetry.stageTimes.push({ stage: i + 1, modules: stage.modules.join('+'),
+                                msOnStage: Date.now() - stageStartTime });
+    if (isLastStage) showProductPage();
+    else showStage(i + 1);
   };
 }
 
-// The final product page (module H), same for everyone.
 function showProductPage() {
-  studyData.reachedProductPage = true;
   app.innerHTML = moduleH();
   window.scrollTo(0, 0);
   watchModules();
@@ -629,92 +654,285 @@ function showProductPage() {
   document.getElementById('addToBag').onclick = function () {
     stopWatchingModules();
     recordClick('Add to Bag');
-    studyData.addedToBag = true;
-    studyData.totalBrowsingTimeMs = Date.now() - startTime;
 
-    // automatically save the data to the Google Sheet, if one is set up
-    if (DATA_ENDPOINT) {
-      try {
-        navigator.sendBeacon(DATA_ENDPOINT, JSON.stringify(studyData));
-      } catch (e) {
-        fetch(DATA_ENDPOINT, { method: 'POST', mode: 'no-cors',
-              headers: { 'Content-Type': 'text/plain' },
-              body: JSON.stringify(studyData) });
-      }
-    }
+    var browseSec = Math.round((Date.now() - startTime) / 100) / 10;
+    S.browsingDone = true;
+    S.browseEndISO = new Date().toISOString();
+    S.browseSec = browseSec;
+    saveS();
 
-    // send the data to the survey platform, if this page is inside an iframe
-    try {
-      window.parent.postMessage({ type: 'study-data', data: studyData }, '*');
-    } catch (e) { /* not embedded - that is fine */ }
+    // save the browsing record; the questionnaire starts either way,
+    // and the final submit will report any earlier problem
+    api({ action: 'browse', startTime: S.startISO, browseEndTime: S.browseEndISO,
+          browseSec: browseSec, events: buildEvents() },
+        function () {}, function (err) { console.log('browse save issue: ' + err); });
 
-    // also print it to the browser console as a backup
-    console.log('STUDY DATA', JSON.stringify(studyData));
-
-    // show the thank-you screen.
-    // The raw data box and download button are only shown to researchers
-    // in preview mode - real participants just see the thank-you message.
-    if (isPreview) {
-      document.getElementById('dataBox').textContent = JSON.stringify(studyData, null, 2);
-    } else {
-      document.getElementById('dataBox').classList.add('hidden');
-      document.getElementById('downloadBtn').classList.add('hidden');
-    }
-    document.getElementById('endScreen').classList.remove('hidden');
+    showCenter('Thank you',
+      'Please answer the following questions about the handbag you just viewed.');
+    setTimeout(startQuestionnaire, 1800);
   };
 }
 
-// the "Download data" button on the thank-you screen
-document.getElementById('downloadBtn').onclick = function () {
-  var file = new Blob([JSON.stringify(studyData, null, 2)], { type: 'application/json' });
-  var link = document.createElement('a');
-  link.href = URL.createObjectURL(file);
-  link.download = 'study-' + studyData.condition + '-' + (studyData.participantId || 'anon') + '.json';
-  link.click();
-  URL.revokeObjectURL(link.href);
-};
+/* ==================================================================
+   PART 10: THE QUESTIONNAIRE (8 pages, fixed order)
+   ================================================================== */
 
-// starts the study in the given condition
-function startStudy(condition) {
-  currentCondition = condition;
-  studyData.condition = condition;
-  startTime = Date.now();
-  studyData.startedAt = new Date().toISOString();
-  document.getElementById('setupScreen').classList.add('hidden');
-  showStage(0);
+var AGREE = ['Strongly disagree', 'Strongly agree'];
+var CURIO = ['Not at all', 'Extremely'];
+
+var QPAGES = [
+  { instruction: 'Please answer the following questions based on the handbag website you just viewed. For all questions on this page, please evaluate the specific handbag shown on the website rather than the brand as a whole.',
+    items: [
+      { id: 'PL1', type: 'likert', anchors: AGREE, text: 'The handbag shown on the website feels luxurious.' },
+      { id: 'PL2', type: 'likert', anchors: AGREE, text: 'The handbag shown on the website feels prestigious.' },
+      { id: 'PL3', type: 'likert', anchors: AGREE, text: 'The handbag shown on the website feels high-class.' },
+      { id: 'PL4', type: 'likert', anchors: AGREE, text: 'The handbag shown on the website feels attractive.' },
+      { id: 'PI1', type: 'likert', anchors: AGREE, text: 'The likelihood that I would purchase this handbag is high.' },
+      { id: 'PI2', type: 'likert', anchors: AGREE, text: 'If I were going to buy a luxury handbag, I would consider buying this handbag at the price shown.' },
+      { id: 'PI3', type: 'likert', anchors: AGREE, text: 'At the price shown, I would consider buying this handbag.' },
+      { id: 'PI4', type: 'likert', anchors: AGREE, text: 'My willingness to buy this handbag is high.' },
+      { id: 'WTP', type: 'number', min: 0, max: 1000000, step: 'any',
+        text: 'Please indicate the maximum amount you would be willing to pay for this handbag. Please enter a number in US dollars.' }
+    ] },
+  { items: [
+      { id: 'PU1', type: 'likert', anchors: AGREE, text: 'I have a clear understanding of this handbag.' },
+      { id: 'PU2', type: 'likert', anchors: AGREE, text: 'I understand the key features of this handbag, including its design, materials, and size options.' },
+      { id: 'PU3', type: 'likert', anchors: AGREE, text: 'I feel knowledgeable about the handbag after browsing the website.' },
+      { id: 'PU4', type: 'likert', anchors: AGREE, text: 'I understand what makes this handbag distinctive within the collection.' },
+      { id: 'PU5', type: 'likert', anchors: AGREE, text: 'I know enough about this handbag to evaluate whether it fits my preferences.' }
+    ] },
+  { items: [
+      { id: 'RIT1', type: 'likert', anchors: AGREE, text: 'The browsing sequence felt like a ceremonial product reveal.' },
+      { id: 'RIT2', type: 'likert', anchors: AGREE, text: 'The sequence felt deliberate and meaningful.' },
+      { id: 'RIT3', type: 'likert', anchors: AGREE, text: 'The process felt set apart from ordinary online browsing.' },
+      { id: 'RIT4', type: 'likert', anchors: AGREE, text: 'Completing the sequence made the handbag encounter feel special.' },
+      { id: 'RIT5', type: 'likert', anchors: AGREE, text: 'The process made the product feel like it was being unveiled rather than simply shown.' }
+    ] },
+  { items: [
+      { id: 'IC1', type: 'likert', anchors: AGREE, text: 'Browsing the product required too many actions.' },
+      { id: 'IC2', type: 'likert', anchors: AGREE, text: 'The process felt unnecessarily effortful.' },
+      { id: 'IC3', type: 'likert', anchors: AGREE, text: 'The sequence interrupted my product exploration.' },
+      { id: 'IC4', type: 'likert', anchors: AGREE, text: 'The interface felt frustrating.' },
+      { id: 'IC5', type: 'likert', anchors: AGREE, text: 'It took too much effort to reach the complete product information.' }
+    ] },
+  { items: [
+      { id: 'CUR1', type: 'likert', anchors: CURIO, text: 'I was eager to learn more about the handbag.' },
+      { id: 'CUR2', type: 'likert', anchors: CURIO, text: 'I was interested in discovering the full product information.' },
+      { id: 'CUR3', type: 'likert', anchors: CURIO, text: 'I had a strong desire to know what the final product page would show.' },
+      { id: 'CUR4', type: 'likert', anchors: CURIO, text: 'I could not wait to see the full product information.' },
+      { id: 'CUR5', type: 'likert', anchors: CURIO, text: 'I was excited to learn more about the handbag.' }
+    ] },
+  { instruction: 'The following questions ask about how the website content was presented. Please indicate the extent to which you agree with the following statements.',
+    items: [
+      { id: 'MC1', type: 'likert', anchors: AGREE, text: 'The product information unfolded through several distinct stages.' },
+      { id: 'MC2', type: 'likert', anchors: AGREE, text: 'I had to progress through multiple steps before seeing the complete product information.' },
+      { id: 'MC3', type: 'likert', anchors: AGREE, text: 'The complete product information was disclosed gradually rather than immediately.' },
+      { id: 'MC4', type: 'likert', anchors: AGREE, text: 'I had to actively move through several sections before reaching the final product page.' },
+      { id: 'MC5', type: 'likert', anchors: AGREE, text: 'Compared with a typical product page, this browsing path felt deep.' }
+    ] },
+  { items: [
+      { id: 'RC1', type: 'select', text: 'Which type of product did you see?',
+        options: [[1,'Handbag'],[2,'Shoes'],[3,'Sunglasses'],[4,'Perfume'],[5,'Not sure']] },
+      { id: 'RC2', type: 'select', text: 'What action button did you see on the final product page?',
+        options: [[1,'Add to Bag'],[2,'Book a Hotel'],[3,'Play Video'],[4,'Subscribe to Newsletter'],[5,'Not sure']] },
+      { id: 'AC1', type: 'likert', anchors: ['',''],
+        text: 'To make sure you are paying attention, please select option 6 for this question.' }
+    ] },
+  { items: [
+      { id: 'GENDER', type: 'select', text: 'What is your gender?',
+        options: [[1,'Male'],[2,'Female'],[3,'Non-binary / third gender'],[4,'Prefer not to say']] },
+      { id: 'AGE', type: 'number', min: 18, max: 100, step: 1,
+        text: 'What is your age? (Please enter number only.)' },
+      { id: 'INCOME', type: 'select', text: 'What is your annual household income?',
+        options: [[1,'Less than $25,000'],[2,'$25,000\u2013$49,999'],[3,'$50,000\u2013$74,999'],
+                  [4,'$75,000\u2013$99,999'],[5,'$100,000\u2013$149,999'],
+                  [6,'$150,000 or more'],[7,'Prefer not to say']] }
+    ] }
+];
+
+function startQuestionnaire() {
+  if (!S.answers) S.answers = {};
+  if (!S.surveyStartISO) { S.surveyStartISO = new Date().toISOString(); }
+  if (!S.surveyStartMs) { S.surveyStartMs = Date.now(); }
+  if (!S.qpage) S.qpage = 1;
+  saveS();
+  renderQPage(S.qpage);
+}
+
+function renderItem(it) {
+  var saved = S.answers[it.id];
+  var html = '<fieldset class="q-item" id="f_' + it.id + '">';
+  html += '<legend>' + it.text + '</legend>';
+  if (it.type === 'likert') {
+    html += '<div class="likert">';
+    html += '<span class="anchor left">' + (it.anchors[0] ? '1 = ' + it.anchors[0] : '') + '</span>';
+    for (var v = 1; v <= 7; v++) {
+      html += '<label class="opt"><input type="radio" name="' + it.id + '" value="' + v + '"' +
+              (saved === v ? ' checked' : '') + '><span>' + v + '</span></label>';
+    }
+    html += '<span class="anchor right">' + (it.anchors[1] ? '7 = ' + it.anchors[1] : '') + '</span>';
+    html += '</div>';
+  } else if (it.type === 'select') {
+    for (var o = 0; o < it.options.length; o++) {
+      html += '<label class="optline"><input type="radio" name="' + it.id + '" value="' + it.options[o][0] + '"' +
+              (saved === it.options[o][0] ? ' checked' : '') + '>' + it.options[o][1] + '</label>';
+    }
+  } else if (it.type === 'number') {
+    html += '<input class="q-num" type="number" name="' + it.id + '" min="' + it.min + '" max="' + it.max +
+            '" step="' + it.step + '"' + (saved != null ? ' value="' + saved + '"' : '') + '>';
+  }
+  html += '</fieldset>';
+  return html;
+}
+
+function renderQPage(p) {
+  var page = QPAGES[p - 1];
+  var html = '<div class="q-wrap">';
+  html += '<p class="q-progress">Page ' + p + ' of ' + QPAGES.length + '</p>';
+  if (page.instruction) html += '<p class="q-instruction">' + page.instruction + '</p>';
+  for (var i = 0; i < page.items.length; i++) html += renderItem(page.items[i]);
+  html += '<p class="q-error" id="qError"></p>';
+  html += '<div class="q-nav"><button class="cta" id="qNext">' +
+          (p === QPAGES.length ? 'Submit' : 'Continue') + '</button></div>';
+  html += '</div>';
+  app.innerHTML = html;
+  window.scrollTo(0, 0);
+
+  // save every answer the moment it is given
+  app.onchange = function (e) {
+    var t = e.target;
+    if (!t || !t.name) return;
+    if (t.type === 'radio') S.answers[t.name] = Number(t.value);
+    if (t.type === 'number') S.answers[t.name] = (t.value === '' ? null : Number(t.value));
+    saveS();
+  };
+
+  document.getElementById('qNext').onclick = function () {
+    var missing = validatePage(page);
+    if (missing) {
+      var err = document.getElementById('qError');
+      err.textContent = missing.message;
+      err.style.display = 'block';
+      var f = document.getElementById('f_' + missing.id);
+      f.classList.add('q-missing');
+      f.scrollIntoView({ block: 'center' });
+      return;
+    }
+    if (p === QPAGES.length) submitAll(this);
+    else { S.qpage = p + 1; saveS(); renderQPage(S.qpage); }
+  };
+}
+
+function validatePage(page) {
+  for (var i = 0; i < page.items.length; i++) {
+    var it = page.items[i];
+    var v = S.answers[it.id];
+    if (v == null || isNaN(v)) {
+      return { id: it.id, message: 'Please answer all questions on this page before continuing.' };
+    }
+    if (it.type === 'number' && (v < it.min || v > it.max)) {
+      return { id: it.id, message: 'Please enter a number between ' + it.min + ' and ' + it.max + '.' };
+    }
+    if (it.id === 'AGE' && v !== Math.round(v)) {
+      return { id: it.id, message: 'Please enter your age as a whole number.' };
+    }
+  }
+  return null;
+}
+
+function submitAll(button) {
+  button.disabled = true;
+  button.textContent = 'Submitting\u2026';
+  var surveySec = Math.round((Date.now() - S.surveyStartMs) / 100) / 10;
+
+  api({ action: 'submit', surveyStartTime: S.surveyStartISO, surveySec: surveySec,
+        answers: S.answers },
+    function () {
+      S.submitted = true; saveS();
+      showCompletion();
+    },
+    function (err) {
+      button.disabled = false;
+      button.textContent = 'Submit';
+      var e2 = document.getElementById('qError');
+      e2.textContent = 'We could not save your responses. Please check your internet connection and press Submit again. Your answers have been kept.';
+      e2.style.display = 'block';
+    });
+}
+
+function showCompletion() {
+  if (PROLIFIC_COMPLETION_URL) {
+    showCenter('Thank you', 'Your responses have been recorded. You are now being returned to Prolific\u2026');
+    setTimeout(function () { window.location.href = PROLIFIC_COMPLETION_URL; }, 2500);
+  } else {
+    showCenter('Thank you', 'Your responses have been recorded. You may now close this window.');
+  }
 }
 
 /* ==================================================================
-   PART 6: STARTUP
-   Read the URL. If it says which condition to use, start right away.
-   If not, show the researcher setup screen.
+   PART 11: STARTUP
+   Reads the URL, restores or creates the session, gets the condition
+   from the backend, and routes to the right screen.
    ================================================================== */
 
 var params = new URLSearchParams(window.location.search);
-studyData.participantId = params.get('pid');           // may be null
-var conditionFromUrl = (params.get('cond') || '').toLowerCase();
+var urlIds = {
+  prolificPid: params.get('PROLIFIC_PID') || '',
+  studyId:     params.get('STUDY_ID') || '',
+  sessionId:   params.get('SESSION_ID') || '',
+  qid:         params.get('QID') || ''
+};
+var isPreview = params.get('preview') === '1';
+var previewCond = (params.get('cond') || '').toLowerCase();
 
-if (CONDITIONS[conditionFromUrl]) {
-  // the URL told us the condition (this is the normal case for participants)
-  startStudy(conditionFromUrl);
-} else {
-  // no valid condition in the URL: let the researcher pick one
-  var setup = document.getElementById('setupScreen');
-  setup.classList.remove('hidden');
+function boot() {
+  if (S.submitted) { showCompletion(); return; }
 
-  var choiceButtons = setup.querySelectorAll('[data-cond]');
-  for (var i = 0; i < choiceButtons.length; i++) {
-    choiceButtons[i].onclick = function () {
-      var chosen = this.getAttribute('data-cond');
-      if (chosen === 'random') {
-        var names = ['low', 'moderate', 'high'];
-        chosen = names[Math.floor(Math.random() * names.length)];
-      }
-      isPreview = true;   // researcher preview: the end screen will show the data
-      startStudy(chosen);
-    };
+  if (!S.responseId) {
+    S.responseId = (isPreview ? 'PREVIEW_' : 'R_') +
+      Date.now().toString(36).toUpperCase() +
+      Math.random().toString(36).slice(2, 8).toUpperCase();
+    S.ids = urlIds;
+    saveS();
   }
+
+  if (S.iv) {                                   // returning within the session
+    if (S.browsingDone) startQuestionnaire();
+    else beginBrowsing();
+    return;
+  }
+
+  if (isPreview) {                              // researcher preview
+    if (!COND_TO_IV[previewCond]) {
+      showCenter('Preview', 'Add cond=low, cond=moderate, or cond=high to the preview link.');
+      return;
+    }
+  } else if (!urlIds.sessionId && !urlIds.prolificPid) {
+    // participants must arrive through their personal link
+    showCenter('Welcome', 'This study must be opened through your participant link. Please use the link you were given.');
+    return;
+  }
+
+  showCenter('One moment\u2026', 'The study is loading.');
+  api({ action: 'assign',
+        prolificPid: S.ids.prolificPid, studyId: S.ids.studyId,
+        sessionId: S.ids.sessionId, qid: S.ids.qid,
+        preview: isPreview, previewIv: COND_TO_IV[previewCond] || 0,
+        schemaVersion: SCHEMA_VERSION, questionnaireVersion: QUESTIONNAIRE_VERSION },
+    function (res) {
+      S.responseId = res.responseId;            // adopt the existing record if re-entering
+      S.iv = res.iv;
+      saveS();
+      beginBrowsing();
+    },
+    function (err) {
+      showError();
+      console.log('assign failed: ' + err);
+    });
 }
+
+boot();
+
 </script>
 </body>
 </html>
