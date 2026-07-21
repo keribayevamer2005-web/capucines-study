@@ -287,6 +287,9 @@
   .q-nav { text-align: center; margin-top: 44px; }
   .center-screen { min-height: 55vh; display: flex; align-items: center;
                    justify-content: center; text-align: center; padding: 40px; }
+  .code-box { font-size: 26px; letter-spacing: 0.28em; border: 1px solid #c9c4bb;
+              background: #fff; padding: 16px 30px; width: max-content;
+              margin: 16px auto; }
 </style>
 </head>
 <body>
@@ -478,6 +481,9 @@ var API_URL = 'https://script.google.com/macros/s/AKfycbxaCCa9JB0UwkE1IEtwKGpmOz
 
 // paste the Prolific completion URL here before launch (leave empty for tests)
 var PROLIFIC_COMPLETION_URL = '';
+
+// the code participants enter on Prolific to confirm they finished
+var PROLIFIC_COMPLETION_CODE = 'C110IX40';
 
 var SCHEMA_VERSION = 'CAPUCINES_V3';
 var QUESTIONNAIRE_VERSION = 'PRETEST1_FIXED_RIT_IC_CUR';
@@ -736,7 +742,7 @@ var QPAGES = [
       { id: 'RC2', type: 'select', text: 'What action button did you see on the final product page?',
         options: [[1,'Add to Bag'],[2,'Book a Hotel'],[3,'Play Video'],[4,'Subscribe to Newsletter'],[5,'Not sure']] },
       { id: 'AC1', type: 'likert', anchors: ['',''],
-        text: 'To make sure you are paying attention, please select option 6 for this question.' }
+        text: 'To make sure you are paying attention, please select your attention degree for this question.' }
     ] },
   { items: [
       { id: 'GENDER', type: 'select', text: 'What is your gender?',
@@ -861,11 +867,21 @@ function submitAll(button) {
 }
 
 function showCompletion() {
+  var codeHtml = '';
+  if (PROLIFIC_COMPLETION_CODE) {
+    codeHtml = '<p class="lede" style="margin-top:22px">Your completion code is:</p>' +
+               '<div class="code-box">' + PROLIFIC_COMPLETION_CODE + '</div>' +
+               '<p class="lede">Please copy this code and enter it on Prolific to confirm your participation.</p>';
+  }
+  app.innerHTML = '<div class="center-screen"><div>' +
+    '<h2>Thank you</h2>' +
+    '<p class="lede" style="margin-top:18px">Your responses have been recorded.</p>' +
+    codeHtml +
+    (PROLIFIC_COMPLETION_URL ? '<p class="lede">You are now being returned to Prolific\u2026</p>' : '') +
+    '</div></div>';
+  window.scrollTo(0, 0);
   if (PROLIFIC_COMPLETION_URL) {
-    showCenter('Thank you', 'Your responses have been recorded. You are now being returned to Prolific\u2026');
-    setTimeout(function () { window.location.href = PROLIFIC_COMPLETION_URL; }, 2500);
-  } else {
-    showCenter('Thank you', 'Your responses have been recorded. You may now close this window.');
+    setTimeout(function () { window.location.href = PROLIFIC_COMPLETION_URL; }, 4000);
   }
 }
 
@@ -896,10 +912,65 @@ if (isTest) {
   urlIds = { prolificPid: t, studyId: 'TEST', sessionId: t, qid: '' };
 }
 
+// the introduction page: her exact text, plus the Prolific ID field.
+// Whatever the participant types here is saved into the PROLIFIC_PID
+// column of the data sheet.
+function showIntro() {
+  var prefill = (S.enteredPid || urlIds.prolificPid || '').replace(/"/g, '');
+  app.innerHTML = '<div class="q-wrap" style="max-width:640px">' +
+    '<h2 style="text-align:center">Introduction</h2>' +
+    '<p class="q-instruction" style="text-align:left;margin-top:30px">Thank you for participating in this survey.</p>' +
+    '<p class="q-instruction" style="text-align:left">In this survey, you will be asked to browse a simulated luxury handbag website and answer questions about your experience. There are no right or wrong answers. We are interested in your genuine opinions.</p>' +
+    '<p class="q-instruction" style="text-align:left">Your responses will be anonymous and will only be used for academic research purposes. Please complete the study carefully and do not refresh or leave the page during the browsing task.</p>' +
+    '<p class="q-instruction" style="text-align:left">Please enter your Prolific ID if you agree to participate.</p>' +
+    '<div class="q-item"><span class="q-text">Prolific ID:</span><br>' +
+      '<input class="q-num" style="width:320px;margin-top:8px" type="text" id="pidInput" value="' + prefill + '">' +
+    '</div>' +
+    '<p class="q-error" id="qError"></p>' +
+    '<div class="q-nav"><button class="cta" id="introNext">Next</button></div>' +
+  '</div>';
+  window.scrollTo(0, 0);
+
+  document.getElementById('introNext').onclick = function () {
+    var v = document.getElementById('pidInput').value.trim();
+    if (!v) {
+      var e = document.getElementById('qError');
+      e.textContent = 'Please enter your Prolific ID to continue.';
+      e.style.display = 'block';
+      return;
+    }
+    S.enteredPid = v;
+    S.introDone = true;
+    saveS();
+    assignFlow();
+  };
+}
+
+// asks the backend for this participant's condition, then starts browsing
+function assignFlow() {
+  showCenter('One moment\u2026', 'The study is loading.');
+  api({ action: 'assign',
+        prolificPid: S.enteredPid || urlIds.prolificPid || '',
+        studyId: urlIds.studyId || 'MAIN',
+        sessionId: urlIds.sessionId || '',
+        qid: urlIds.qid || '',
+        preview: isPreview, previewIv: COND_TO_IV[previewCond] || 0,
+        schemaVersion: SCHEMA_VERSION, questionnaireVersion: QUESTIONNAIRE_VERSION },
+    function (res) {
+      S.responseId = res.responseId;
+      S.iv = res.iv;
+      saveS();
+      beginBrowsing();
+    },
+    function (err) {
+      showError();
+      console.log('assign failed: ' + err);
+    });
+}
+
 function boot() {
   // if this tab holds a session for a DIFFERENT participant id (or a
-  // different preview condition), drop it and start fresh - this mainly
-  // matters when testing several links in the same tab
+  // different preview condition), drop it and start fresh
   var differentPerson = S.ids && urlIds.sessionId && S.ids.sessionId !== urlIds.sessionId;
   var differentPreview = isPreview && S.iv && COND_TO_IV[previewCond] &&
                          S.iv !== COND_TO_IV[previewCond];
@@ -924,33 +995,21 @@ function boot() {
     return;
   }
 
-  if (isPreview) {                              // researcher preview
-    if (!COND_TO_IV[previewCond]) {
-      showCenter('Preview', 'Add cond=low, cond=moderate, or cond=high to the preview link.');
-      return;
-    }
-  } else if (!urlIds.sessionId && !urlIds.prolificPid) {
-    // participants must arrive through their personal link
-    showCenter('Welcome', 'This study must be opened through your participant link. Please use the link you were given.');
+  if (isPreview && !COND_TO_IV[previewCond]) {
+    showCenter('Preview', 'Add cond=low, cond=moderate, or cond=high to the preview link.');
     return;
   }
 
-  showCenter('One moment\u2026', 'The study is loading.');
-  api({ action: 'assign',
-        prolificPid: S.ids.prolificPid, studyId: S.ids.studyId,
-        sessionId: S.ids.sessionId, qid: S.ids.qid,
-        preview: isPreview, previewIv: COND_TO_IV[previewCond] || 0,
-        schemaVersion: SCHEMA_VERSION, questionnaireVersion: QUESTIONNAIRE_VERSION },
-    function (res) {
-      S.responseId = res.responseId;            // adopt the existing record if re-entering
-      S.iv = res.iv;
-      saveS();
-      beginBrowsing();
-    },
-    function (err) {
-      showError();
-      console.log('assign failed: ' + err);
-    });
+  if (isTest) {                                 // test mode skips the intro
+    S.enteredPid = urlIds.prolificPid;
+    S.introDone = true;
+    saveS();
+    assignFlow();
+    return;
+  }
+
+  if (!S.introDone) { showIntro(); return; }
+  assignFlow();
 }
 
 boot();
