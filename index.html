@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=1000">
+<script src="https://www.google.com/recaptcha/api.js?onload=captchaApiLoaded&render=explicit" async defer></script>
 <title>Maison Atelier</title>
 
 <!--
@@ -503,6 +504,19 @@ var PROLIFIC_COMPLETION_URL = '';
 // the code participants enter on Prolific to confirm they finished
 var PROLIFIC_COMPLETION_CODE = 'C110IX40';
 
+// Google reCAPTCHA "I'm not a robot" checkbox on the Prolific ID page.
+// Production site key, registered for keribayevamer2005-web.github.io.
+var RECAPTCHA_SITE_KEY = '6Lfytl8tAAAAAJOCC9-HLgE0wECOeHCTy2RH-1xj';
+
+var captchaWidget = null;
+window.captchaApiLoaded = function () { tryRenderCaptcha(); };
+function tryRenderCaptcha() {
+  if (window.grecaptcha && window.grecaptcha.render &&
+      document.getElementById('captchaBox') && captchaWidget === null) {
+    captchaWidget = window.grecaptcha.render('captchaBox', { sitekey: RECAPTCHA_SITE_KEY });
+  }
+}
+
 var SCHEMA_VERSION = 'CAPUCINES_V3';
 var QUESTIONNAIRE_VERSION = 'PRETEST1_FIXED_RIT_IC_CUR';
 var IV_TO_COND = { 1: 'low', 2: 'moderate', 3: 'high' };
@@ -944,49 +958,34 @@ function showIntro() {
     '<div class="q-item"><span class="q-text">Prolific ID:</span><br>' +
       '<input class="q-num" style="width:320px;margin-top:8px" type="text" id="pidInput" value="' + prefill + '">' +
     '</div>' +
+    '<p class="q-instruction" style="text-align:left">Before you proceed to the task, please complete the captcha below.</p>' +
+    '<div id="captchaBox" style="margin:14px 0 6px"></div>' +
     '<p class="q-error" id="qError"></p>' +
     '<div class="q-nav"><button class="cta" id="introNext">Next</button></div>' +
   '</div>';
   window.scrollTo(0, 0);
+  captchaWidget = null;      // the page was re-rendered, so render a fresh widget
+  tryRenderCaptcha();
 
   document.getElementById('introNext').onclick = function () {
+    var e = document.getElementById('qError');
     var v = document.getElementById('pidInput').value.trim();
     if (!v) {
-      var e = document.getElementById('qError');
       e.textContent = 'Please enter your Prolific ID to continue.';
       e.style.display = 'block';
       return;
     }
+    var token = (window.grecaptcha && captchaWidget !== null) ? window.grecaptcha.getResponse(captchaWidget) : '';
+    if (!token) {
+      e.textContent = 'Please complete the captcha to continue.';
+      e.style.display = 'block';
+      return;
+    }
     S.enteredPid = v;
+    S.captchaToken = token;
     S.introDone = true;
     saveS();
-    showHumanCheck();
-  };
-}
-
-// a quick human check after the ID page: drag the slider all the way
-// to the right to continue (a simple barrier against bots and
-// auto-completion tools)
-function showHumanCheck() {
-  app.innerHTML = '<div class="q-wrap" style="max-width:640px;text-align:center">' +
-    '<h2>Quick check</h2>' +
-    '<p class="q-instruction" style="margin-top:26px">Please slide the circle all the way to the right to continue.</p>' +
-    '<div class="swipe-wrap">' +
-      '<input class="swipe-track" type="range" id="swipe" min="0" max="100" value="0" step="1">' +
-      '<p class="swipe-hint">Slide to continue</p>' +
-    '</div>' +
-  '</div>';
-  window.scrollTo(0, 0);
-
-  var done = false;
-  document.getElementById('swipe').oninput = function () {
-    if (done) return;
-    if (Number(this.value) >= 100) {
-      done = true;
-      S.humanDone = true;
-      saveS();
-      assignFlow();
-    }
+    assignFlow();
   };
 }
 
@@ -1044,17 +1043,15 @@ function boot() {
     return;
   }
 
-  if (isTest) {                                 // test mode skips intro + check
+  if (isTest) {                                 // test mode skips the intro
     S.enteredPid = urlIds.prolificPid;
     S.introDone = true;
-    S.humanDone = true;
     saveS();
     assignFlow();
     return;
   }
 
   if (!S.introDone) { showIntro(); return; }
-  if (!S.humanDone) { showHumanCheck(); return; }
   assignFlow();
 }
 
