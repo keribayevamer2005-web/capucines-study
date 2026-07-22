@@ -290,6 +290,24 @@
   .code-box { font-size: 26px; letter-spacing: 0.28em; border: 1px solid #c9c4bb;
               background: #fff; padding: 16px 30px; width: max-content;
               margin: 16px auto; }
+
+  /* the swipe-to-continue human check */
+  .swipe-wrap { width: 340px; margin: 30px auto 0; }
+  .swipe-track {
+    -webkit-appearance: none; appearance: none;
+    width: 100%; height: 46px; border-radius: 999px;
+    background: #eee9e2; border: 1px solid #c9c4bb; outline: none;
+  }
+  .swipe-track::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 42px; height: 42px; border-radius: 50%;
+    background: var(--ink); cursor: pointer;
+  }
+  .swipe-track::-moz-range-thumb {
+    width: 42px; height: 42px; border-radius: 50%;
+    background: var(--ink); border: none; cursor: pointer;
+  }
+  .swipe-hint { text-align: center; font-size: 13px; color: var(--stone); margin-top: 14px; }
 </style>
 </head>
 <body>
@@ -942,7 +960,33 @@ function showIntro() {
     S.enteredPid = v;
     S.introDone = true;
     saveS();
-    assignFlow();
+    showHumanCheck();
+  };
+}
+
+// a quick human check after the ID page: drag the slider all the way
+// to the right to continue (a simple barrier against bots and
+// auto-completion tools)
+function showHumanCheck() {
+  app.innerHTML = '<div class="q-wrap" style="max-width:640px;text-align:center">' +
+    '<h2>Quick check</h2>' +
+    '<p class="q-instruction" style="margin-top:26px">Please slide the circle all the way to the right to continue.</p>' +
+    '<div class="swipe-wrap">' +
+      '<input class="swipe-track" type="range" id="swipe" min="0" max="100" value="0" step="1">' +
+      '<p class="swipe-hint">Slide to continue</p>' +
+    '</div>' +
+  '</div>';
+  window.scrollTo(0, 0);
+
+  var done = false;
+  document.getElementById('swipe').oninput = function () {
+    if (done) return;
+    if (Number(this.value) >= 100) {
+      done = true;
+      S.humanDone = true;
+      saveS();
+      assignFlow();
+    }
   };
 }
 
@@ -1000,15 +1044,17 @@ function boot() {
     return;
   }
 
-  if (isTest) {                                 // test mode skips the intro
+  if (isTest) {                                 // test mode skips intro + check
     S.enteredPid = urlIds.prolificPid;
     S.introDone = true;
+    S.humanDone = true;
     saveS();
     assignFlow();
     return;
   }
 
   if (!S.introDone) { showIntro(); return; }
+  if (!S.humanDone) { showHumanCheck(); return; }
   assignFlow();
 }
 
